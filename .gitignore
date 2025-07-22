@@ -1,0 +1,24 @@
+# Folders
+vscode/*
+__pycache__/*
+pse_environments/__pycache__/*
+env/*
+env/
+
+# Files
+**/.DS_Store
+launch.json
+__pycache__/
+*.pyc
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.npz
+*.npy
+data/
+models/
+logs/
+.env
+env/
