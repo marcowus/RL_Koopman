@@ -50,7 +50,8 @@ class CSTR1():
                  normalize_state = True,
                  normalize_action = True,
                  discrete_model = None,
-                 device=None
+                 device=None,
+                 param_overrides=None
                  ):
         self.delta_t = delta_t
         self.normalize_state = normalize_state
@@ -106,6 +107,8 @@ class CSTR1():
                      'roh': 1.0/(60.0*60.0),
                      'T': 0.7293,
                      'Fc': 390.0/(60.0*60.0)}}
+        if param_overrides:
+            self.cstr_parameters.update(param_overrides)
         
         # stuff needed for model-based RL algorithms
         self.discrete_model = discrete_model
@@ -209,6 +212,77 @@ class CSTR1():
         else:
             raise ValueError('storage_initialization must be "empty", "random" or a float')
         return storage
+
+
+class CSTR1Env(gym.Env):
+    """Gymnasium environment wrapper for :class:`CSTR1`.
+
+    The environment exposes the two normalized states (concentration ``c`` and
+    temperature ``T``) as observations and expects two normalized control
+    inputs.  Rewards are set to zero by default – the class only models the
+    system dynamics.  Episodes terminate after ``episode_length`` steps.
+    """
+
+    metadata = {"render_modes": []}
+
+    def __init__(self, delta_t, normalize_state=True, normalize_action=True,
+                 episode_length=200, device=None, param_overrides=None,
+                 c_target: float = 0.6):
+        super().__init__()
+        self.model = CSTR1(delta_t, normalize_state=normalize_state,
+                           normalize_action=normalize_action, device=device,
+                           param_overrides=param_overrides)
+        self.action_space = self.model.action_space
+        if normalize_state:
+            low = -np.ones(self.model.n_states, dtype=np.float32)
+            high = np.ones(self.model.n_states, dtype=np.float32)
+        else:
+            low = self.model.x_bounds['lower'].cpu().numpy()
+            high = self.model.x_bounds['upper'].cpu().numpy()
+        self.observation_space = gym.spaces.Box(low=low, high=high,
+                                                dtype=np.float32)
+        self.episode_length = episode_length
+        self.device = self.model.device
+        self.state = None
+        self.steps = 0
+        self.c_target = c_target
+
+    def step(self, action):
+        if isinstance(action, np.ndarray):
+            action = torch_.tensor(action, dtype=torch_.float32,
+                                   device=self.device)
+        x, _, _, _ = self.model.forward(self.state, action)
+        self.state = x[-1]
+        self.steps += 1
+        obs = (self.state.cpu().numpy() if isinstance(self.state, torch_.Tensor)
+               else self.state)
+        # compute reward based on concentration error
+        if self.model.normalize_state:
+            c_current = (
+                self.model.state_scaler.unscale(self.state)[0].item()
+                if isinstance(self.state, torch_.Tensor)
+                else self.model.state_scaler.unscale(torch_.tensor(self.state))[0].item()
+            )
+        else:
+            c_current = (
+                self.state[0].item() if isinstance(self.state, torch_.Tensor)
+                else self.state[0]
+            )
+        error = c_current - self.c_target
+        reward = -(error ** 2)
+        terminated = False
+        truncated = self.steps >= self.episode_length
+        info = {"c": c_current}
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self.state = self.model.get_initial_state()
+        self.steps = 0
+        obs = (self.state.cpu().numpy() if isinstance(self.state, torch_.Tensor)
+               else self.state)
+        info = {}
+        return obs, info
 
 ### Testing
 if __name__ == '__main__':
