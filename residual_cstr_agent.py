@@ -1,16 +1,17 @@
 """Residual RL example for the CSTR environment.
 
-This script demonstrates how to train a base SAC policy on the default
-``CSTR1Env`` and then adapt to a modified environment using a residual
-policy.  The residual policy learns corrections on top of the frozen base
-policy.  The example is intentionally lightweight – the reward is zero and
-the training steps are small – but it shows how to compose actions from a
-base policy with residual actions.
+This script trains a base SAC policy that regulates the reactor
+concentration toward ``c = 0.6`` and then adapts to a perturbed
+environment (different coolant temperature) using a residual policy.  The
+resulting trajectories for the base-only and base+residual controllers are
+plotted for comparison.
 """
 
 from typing import Optional, Dict, List
 
 import numpy as np
+import torch
+import matplotlib.pyplot as plt
 import gymnasium as gym
 from stable_baselines3 import SAC
 
@@ -101,23 +102,34 @@ def train_residual(base_model: SAC, total_timesteps: int = 100) -> SAC:
 
 
 if __name__ == "__main__":
-    base = train_base(total_timesteps=100)
-    residual = train_residual(base, total_timesteps=100)
+    base = train_base(total_timesteps=200)
+    residual = train_residual(base, total_timesteps=200)
 
-    test_env = ResidualWrapper(make_env(param_overrides={"T_c": 0.40}), base)
-    obs, _ = test_env.reset()
-    for _ in range(5):
-        res_action, _ = residual.predict(obs, deterministic=True)
-        obs, _, terminated, truncated, _ = test_env.step(res_action)
-        if terminated or truncated:
-            obs, _ = test_env.reset()
+    # Evaluate in a perturbed environment
+    eval_env_base = make_env(param_overrides={"T_c": 0.40})
+    eval_env_res = ResidualWrapper(make_env(param_overrides={"T_c": 0.40}), base)
 
-    base_action, _ = base.predict(obs, deterministic=True)
-    final_action = np.clip(
-        base_action + res_action,
-        test_env.action_space.low,
-        test_env.action_space.high,
-    )
-    print("Residual action:", res_action)
-    print("Final combined action:", final_action)
+    def rollout(env, policy, steps=50):
+        obs, _ = env.reset()
+        traj = []
+        for _ in range(steps):
+            action, _ = policy.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, _ = env.step(action)
+            c_val = env.model.state_scaler.unscale(torch.tensor(obs))[0].item() if isinstance(env, CSTR1Env) else env.env.model.state_scaler.unscale(torch.tensor(obs))[0].item()
+            traj.append(c_val)
+            if terminated or truncated:
+                break
+        return traj
 
+    base_traj = rollout(eval_env_base, base)
+    res_traj = rollout(eval_env_res, residual)
+
+    plt.plot(base_traj, label="Base only")
+    plt.plot(res_traj, label="Base + residual")
+    plt.axhline(eval_env_base.c_target, color="r", linestyle="--", label="target")
+    plt.xlabel("Step")
+    plt.ylabel("Concentration c")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("residual_cstr_trajectory.png")
+    print("Trajectory plot saved to residual_cstr_trajectory.png")

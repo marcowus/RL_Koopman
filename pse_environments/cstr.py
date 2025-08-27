@@ -226,7 +226,8 @@ class CSTR1Env(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, delta_t, normalize_state=True, normalize_action=True,
-                 episode_length=200, device=None, param_overrides=None):
+                 episode_length=200, device=None, param_overrides=None,
+                 c_target: float = 0.6):
         super().__init__()
         self.model = CSTR1(delta_t, normalize_state=normalize_state,
                            normalize_action=normalize_action, device=device,
@@ -244,6 +245,7 @@ class CSTR1Env(gym.Env):
         self.device = self.model.device
         self.state = None
         self.steps = 0
+        self.c_target = c_target
 
     def step(self, action):
         if isinstance(action, np.ndarray):
@@ -254,10 +256,23 @@ class CSTR1Env(gym.Env):
         self.steps += 1
         obs = (self.state.cpu().numpy() if isinstance(self.state, torch_.Tensor)
                else self.state)
-        reward = 0.0
+        # compute reward based on concentration error
+        if self.model.normalize_state:
+            c_current = (
+                self.model.state_scaler.unscale(self.state)[0].item()
+                if isinstance(self.state, torch_.Tensor)
+                else self.model.state_scaler.unscale(torch_.tensor(self.state))[0].item()
+            )
+        else:
+            c_current = (
+                self.state[0].item() if isinstance(self.state, torch_.Tensor)
+                else self.state[0]
+            )
+        error = c_current - self.c_target
+        reward = -(error ** 2)
         terminated = False
         truncated = self.steps >= self.episode_length
-        info = {}
+        info = {"c": c_current}
         return obs, reward, terminated, truncated, info
 
     def reset(self, *, seed=None, options=None):

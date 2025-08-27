@@ -8,6 +8,8 @@ experiments.
 
 from stable_baselines3 import SAC
 import gymnasium as gym
+import torch
+import matplotlib.pyplot as plt
 from pse_environments import CSTR1Env
 
 
@@ -46,12 +48,23 @@ def train_example(total_timesteps: int = 100) -> SAC:
 
 
 if __name__ == "__main__":
-    model = train_example(total_timesteps=100)
+    model = train_example(total_timesteps=200)
     env = make_env()
     obs, _ = env.reset()
-    for _ in range(5):
+    concentrations = []
+    for _ in range(50):
         action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, _ = env.step(action)
+        obs, reward, terminated, truncated, info = env.step(action)
+        c_val = env.model.state_scaler.unscale(torch.tensor(obs))[0].item()
+        concentrations.append(c_val)
         if terminated or truncated:
-            obs, _ = env.reset()
-    print("Sampled action after training:", action)
+            break
+
+    plt.plot(concentrations, label="SAC policy")
+    plt.axhline(env.c_target, color="r", linestyle="--", label="target")
+    plt.xlabel("Step")
+    plt.ylabel("Concentration c")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("sac_cstr_trajectory.png")
+    print("Trajectory plot saved to sac_cstr_trajectory.png")
