@@ -8,7 +8,7 @@ the training steps are small – but it shows how to compose actions from a
 base policy with residual actions.
 """
 
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 import numpy as np
 import gymnasium as gym
@@ -35,12 +35,30 @@ def train_base(total_timesteps: int = 100) -> SAC:
 
 
 class ResidualWrapper(gym.Env):
-    """Environment wrapper that applies a base policy before residual actions."""
+    """Environment wrapper that applies a base policy before residual actions.
 
-    def __init__(self, env: gym.Env, base_policy: SAC):
+    Parameters
+    ----------
+    env : gym.Env
+        Wrapped environment.
+    base_policy : SAC
+        Frozen policy providing baseline actions.
+    residual_policies : list[SAC], optional
+        Previously learned residual policies whose actions are composed before
+        the new residual action.  This allows progressive stacking of residual
+        controllers when learning a sequence of tasks.
+    """
+
+    def __init__(
+        self,
+        env: gym.Env,
+        base_policy: SAC,
+        residual_policies: Optional[List[SAC]] = None,
+    ):
         super().__init__()
         self.env = env
         self.base_policy = base_policy
+        self.residual_policies = residual_policies or []
         self.action_space = env.action_space
         self.observation_space = env.observation_space
         self._last_obs = None
@@ -52,6 +70,15 @@ class ResidualWrapper(gym.Env):
 
     def step(self, residual_action):
         base_action, _ = self.base_policy.predict(self._last_obs, deterministic=True)
+
+        for pol in self.residual_policies:
+            corr, _ = pol.predict(self._last_obs, deterministic=True)
+            base_action = np.clip(
+                base_action + corr,
+                self.env.action_space.low,
+                self.env.action_space.high,
+            )
+
         final_action = np.clip(
             base_action + residual_action,
             self.env.action_space.low,
